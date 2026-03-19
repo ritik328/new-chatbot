@@ -1,0 +1,17 @@
+# Root Gitignore
+**/node_modules/
+**/dist/
+**/.next/
+**/out/
+**/build/
+**/coverage/
+**/.env
+**/.env*.local
+**/.vercel
+**/*.tsbuildinfo
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/.DS_Store
+**/*.pem
+**/*.log
