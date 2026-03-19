@@ -114,8 +114,8 @@ export const Sidebar = () => {
   return (
     <div 
       className={cn(
-        "flex h-full flex-col border-r bg-muted/40 transition-all duration-300 ease-in-out whitespace-nowrap overflow-hidden",
-        isSidebarOpen ? "w-64 p-4 opacity-100" : "w-0 p-0 border-r-0 opacity-0"
+        "flex h-full flex-col border-r bg-[#121212] md:bg-muted/10 transition-all duration-300 ease-in-out whitespace-nowrap overflow-hidden",
+        isSidebarOpen ? "w-[280px] p-4 opacity-100" : "w-0 p-0 border-r-0 opacity-0"
       )}
     >
       <div className="flex items-center justify-between mb-4">
