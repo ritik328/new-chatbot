@@ -27,7 +27,7 @@ export const uploadProjectDocument = async (req: Request, res: Response): Promis
 
     if (file.mimetype === 'application/pdf') {
        try {
-         const pdfData = await pdfParse(file.buffer);
+         const pdfData = await (pdfParse as any)(file.buffer);
          rawText = pdfData.text;
        } catch (pdfErr) {
          res.status(400).json({ success: false, error: 'Failed to extract text from PDF document.' });
