@@ -4,12 +4,15 @@ import CleanChat from '@/components/CleanChat';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { useChatStore } from '@/store/useChatStore';
 import { cn } from '@/lib/utils';
+import { SettingsModal } from '@/components/chat/SettingsModal';
 
 export default function Home() {
   const { isSidebarOpen, toggleSidebar } = useChatStore();
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background relative">
+    <div className="flex h-[100dvh] w-full overflow-hidden bg-background relative">
+      <SettingsModal />
+
       {/* Mobile Sidebar Overlay */}
       {isSidebarOpen && (
         <div 
