@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { IConversation } from '@/types';
 import { useTheme } from 'next-themes';
+import { ProjectSettings } from '@/components/chat/ProjectSettings';
 
 export const Sidebar = () => {
   const { 
@@ -27,6 +28,7 @@ export const Sidebar = () => {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [settingsChat, setSettingsChat] = useState<IConversation | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -175,6 +177,15 @@ export const Sidebar = () => {
                         variant="ghost"
                         size="icon"
                         className="h-6 w-6 hover:bg-muted"
+                        onClick={(e) => { e.stopPropagation(); setSettingsChat(chat); }}
+                        title="Project Settings (AI & Stats)"
+                      >
+                        <Settings className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 hover:bg-muted"
                         onClick={(e) => handleEditFolder(e, chat._id, chat.folder)}
                         title="Move to Folder"
                       >
@@ -213,6 +224,13 @@ export const Sidebar = () => {
           Toggle Theme
         </Button>
       </div>
+      {/* Project Settings Modal */}
+      {settingsChat && (
+        <ProjectSettings 
+          chat={settingsChat} 
+          onClose={() => setSettingsChat(null)} 
+        />
+      )}
     </div>
   );
 };
