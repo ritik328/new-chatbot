@@ -447,21 +447,17 @@ export default function CleanChat() {
                   {/* subtle label */}
                   <span className="text-xs text-white/20 mb-1 font-mono">assistant</span>
                   <div className="text-white/90">
-                    <AIMarkdown content={msg.content} />
+                    {msg.content === '' && isGenerating && i === activeMessages.length - 1 ? (
+                      <TypingDots />
+                    ) : (
+                      <AIMarkdown content={msg.content} />
+                    )}
                   </div>
                 </div>
               )}
 
             </div>
           ))}
-
-          {/* typing indicator */}
-          {isGenerating && activeMessages.length > 0 && activeMessages[activeMessages.length - 1].content === '' && (
-            <div className="flex flex-col gap-1">
-              <span className="text-xs text-white/20 mb-1 font-mono">assistant</span>
-              <TypingDots />
-            </div>
-          )}
 
           <div ref={bottomRef} />
         </div>

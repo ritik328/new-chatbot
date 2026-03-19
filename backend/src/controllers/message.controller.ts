@@ -64,8 +64,14 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
     const memoryContext = await getUserMemoriesString('default_user');
     const ragContext = await queryKnowledgeBase(conversationId, content, 3);
     
-    let combinedSystemContext = memoryContext;
-    if (searchContext) combinedSystemContext += `\n\n${searchContext}`;
+    // Always provide the current date/time to the AI
+    const now = new Date();
+    const dateString = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const timeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const timeContext = `Current Date: ${dateString}\nCurrent Time: ${timeString}\nReal-time Search: ENABLED`;
+
+    let combinedSystemContext = `${timeContext}\n\n${memoryContext}`;
+    if (searchContext) combinedSystemContext += `\n\n--- WEB SEARCH RESULTS ---\n${searchContext}`;
     if (ragContext) {
       combinedSystemContext += `\n\n--- DOCUMENT KNOWLEDGE BASE ---\n${ragContext}\n\nUse this information from the uploaded project documents to answer the question. Cite source filenames.`;
     }
