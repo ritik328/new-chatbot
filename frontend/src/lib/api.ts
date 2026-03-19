@@ -11,8 +11,8 @@ export const api = axios.create({
 });
 
 // ── Chats API ─────────────────────────────────────────────────────────────
-export const fetchChats = async (query?: string): Promise<IConversation[]> => {
-  const url = query ? `/chats?q=${encodeURIComponent(query)}` : '/chats';
+export const fetchChats = async (projectId?: string | null): Promise<IConversation[]> => {
+  const url = projectId ? `/projects/${projectId}/chats` : '/chats';
   const { data } = await api.get<ApiResponse<{ chats: IConversation[] }>>(url);
   return data.data?.chats || [];
 };
@@ -23,10 +23,11 @@ export const fetchChatById = async (id: string): Promise<{ chat: IConversation; 
   return data.data;
 };
 
-export const createChat = async (model: string, searchEnabled: boolean): Promise<IConversation> => {
+export const createChat = async (model: string, searchEnabled: boolean, projectId?: string | null): Promise<IConversation> => {
   const { data } = await api.post<ApiResponse<{ chat: IConversation }>>('/chats', {
     model,
     searchEnabled,
+    projectId
   });
   if (!data.data) throw new Error('Failed to create chat');
   return data.data.chat;

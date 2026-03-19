@@ -9,7 +9,8 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import 'katex/dist/katex.min.css'
 import { useChatStore } from '@/store/useChatStore'
-import { createChat } from '@/lib/api'
+import { useProjectStore } from '@/store/useProjectStore'
+import { createChat, fetchChats } from '@/lib/api'
 import { IMessage } from '@/types'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
@@ -137,6 +138,7 @@ function FilePill({ file, onRemove }: any) {
   )
 }
 
+// ── main ────────────────────────────────────────────────────────
 export default function CleanChat() {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<any[]>([])
@@ -145,12 +147,15 @@ export default function CleanChat() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  
   const { 
     isSidebarOpen, toggleSidebar, searchEnabled, setSearchEnabled,
     activeMessages, activeChatId, setActiveChat, setActiveMessages,
     addMessage, updateLastMessage, isGenerating, setIsGenerating,
     setAbortController, stopGeneration
   } = useChatStore()
+
+  const { activeProjectId } = useProjectStore()
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [activeMessages, isGenerating])
   useEffect(() => {
@@ -164,7 +169,12 @@ export default function CleanChat() {
     const text = input.trim(); if (!text && files.length === 0) return; if (isGenerating) return
     let chatId = activeChatId; setInput(''); setFiles([]); setIsGenerating(true)
     if (!chatId) {
-      try { const newChat = await createChat(selectedModel as any, searchEnabled); chatId = newChat._id; setActiveChat(chatId); setActiveMessages([]) }
+      try { 
+        const newChat = await createChat(selectedModel as any, searchEnabled, activeProjectId); 
+        chatId = newChat._id; 
+        setActiveChat(chatId); 
+        setActiveMessages([]) 
+      }
       catch (err) { setIsGenerating(false); return }
     }
     addMessage({ _id: Date.now().toString(), conversationId: chatId, role: 'user', content: text, createdAt: new Date().toISOString() })

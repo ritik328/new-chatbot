@@ -14,11 +14,12 @@ import chatRoutes from './routes/chat.routes';
 import searchRoutes from './routes/search.routes';
 import cleanChatRoutes from './routes/clean-chat.routes';
 import knowledgeRoutes from './routes/knowledge.routes';
+import projectRoutes from './routes/project.routes';
 import { ensureQdrantCollection } from './services/qdrant.service';
 
 const app = express();
 const server = http.createServer(app);
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8080;
 
 // ── Security & Middleware ─────────────────────────────────────────────────────
 app.use(cors());
@@ -27,9 +28,9 @@ app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use('/api', apiLimiter);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
+app.use('/api/projects', projectRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/chat', cleanChatRoutes);

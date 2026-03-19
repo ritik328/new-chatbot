@@ -2,7 +2,8 @@ import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IConversationDocument extends Document {
   title: string;
-  aiModel: 'gpt-4o' | 'gpt-4o-mini';
+  projectId: string | null;
+  aiModel: 'gpt-4o' | 'gpt-4o-mini' | 'gpt-4-turbo' | 'gpt-3.5-turbo';
   searchEnabled: boolean;
   folder: string | null;
   messageCount: number;
@@ -19,9 +20,13 @@ const ConversationSchema = new Schema<IConversationDocument>(
       default: 'New Chat',
       maxlength: [100, 'Title cannot exceed 100 characters'],
     },
+    projectId: {
+      type: String,
+      default: null,
+    },
     aiModel: {
       type: String,
-      enum: ['gpt-4o', 'gpt-4o-mini'],
+      enum: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
       default: 'gpt-4o-mini',
     },
     searchEnabled: {

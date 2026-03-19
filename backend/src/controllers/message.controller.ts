@@ -1,32 +1,40 @@
 import { Request, Response } from 'express';
 import { Message } from '../models/Message';
 import { Conversation } from '../models/Conversation';
+import { Project, IProject } from '../models/Project';
 import { streamChatCompletion, generateChatTitle } from '../services/openai.service';
 import { smartSearch } from '../services/search.service';
 import { extractAndStoreMemories, getUserMemoriesString } from '../services/memory.service';
 import { queryKnowledgeBase } from '../services/qdrant.service';
-
 import { ChatMessage } from '../types/index';
 
 // POST /api/chats/:id/send
-// This is the core endpoint — handles the full pipeline:
-// user message → search (optional) → memory → OpenAI stream → save
 export const sendMessage = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id: conversationId } = req.params;
-    const { content, useSearch } = req.body;
+    const { content, useSearch: bodySearch } = req.body;
 
     if (!content?.trim()) {
       res.status(400).json({ success: false, error: 'Message content required' });
       return;
     }
 
-    // Verify conversation exists
     const conversation = await Conversation.findOne({ _id: conversationId });
     if (!conversation) {
       res.status(404).json({ success: false, error: 'Conversation not found' });
       return;
     }
+
+    // ── 0. Fetch Project Settings ───────────────────────────────────────────
+    let project: any = null;
+    if (conversation.projectId) {
+      project = await Project.findById(conversation.projectId);
+    }
+
+    const finalModel = project?.aiModel || conversation.aiModel || 'gpt-4o-mini';
+    const finalSystemPrompt = project?.systemPrompt || conversation.systemPrompt;
+    const finalUseSearch = bodySearch || project?.webSearch || conversation.searchEnabled;
+    const projectCollection = project?.files?.[0]?.qdrantCollection;
 
     // ── 1. Save user message ─────────────────────────────────────────────────
     const userMessage = await Message.create({
@@ -35,50 +43,39 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
       content: content.trim(),
     });
 
-    // Fire & Forget: Background thread extracts and memorizes facts silently
-    // Temporarily using 'default_user' since auth is not yet implemented
     extractAndStoreMemories('default_user', content.trim());
 
-    // Auto-title the chat on first message
     if (conversation.messageCount === 0) {
       const title = await generateChatTitle(content);
       await Conversation.findByIdAndUpdate(conversationId, { title });
     }
 
-    // ── 2. Serpstack Search (optional) ───────────────────────────────────────
-    let sources: { title: string; url: string; description: string }[] = [];
+    // ── 2. Search & Context ─────────────────────────────────────────────────
+    let sources: any[] = [];
     let searchContext = '';
 
-    const autoSearchKeywords = ['latest', 'new', 'update', 'current', 'today', 'now', '2025', '2026', 'recent', 'news'];
-    const shouldAutoSearch = autoSearchKeywords.some(w => content.toLowerCase().includes(w));
-    const finalUseSearch = useSearch || shouldAutoSearch;
-
-    // Optional: Web Search via Smart Router
     if (finalUseSearch) {
       const { contextString, sources: searchSources } = await smartSearch(content, 3);
       searchContext = contextString;
       sources = searchSources;
     }
 
-    // ── 3. Context Retrieval (Memory, Web, RAG) ─────────────────────────
     const memoryContext = await getUserMemoriesString('default_user');
-    const ragContext = await queryKnowledgeBase(conversationId, content, 3);
+    const ragContext = await queryKnowledgeBase(projectCollection || conversationId, content, 3);
     
-    // Always provide the current date/time to the AI
     const now = new Date();
     const dateString = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     const timeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    const timeContext = `Current Date: ${dateString}\nCurrent Time: ${timeString}\nReal-time Search: ENABLED`;
+    const timeContext = `Current Date: ${dateString}\nCurrent Time: ${timeString}\nReal-time Search: ${finalUseSearch ? 'ENABLED' : 'DISABLED'}`;
 
     let combinedSystemContext = `${timeContext}\n\n${memoryContext}`;
     if (searchContext) combinedSystemContext += `\n\n--- WEB SEARCH RESULTS ---\n${searchContext}`;
     if (ragContext) {
-      combinedSystemContext += `\n\n--- DOCUMENT KNOWLEDGE BASE ---\n${ragContext}\n\nUse this information from the uploaded project documents to answer the question. Cite source filenames.`;
+      combinedSystemContext += `\n\n--- PROJECT KNOWLEDGE BASE ---\n${ragContext}`;
     }
     combinedSystemContext = combinedSystemContext.trim();
 
-
-    // ── 4. Load last N messages for context window ───────────────────────────
+    // ── 3. Load chat history ────────────────────────────────────────────────
     const recentMessages = await Message.find({ conversationId })
       .sort({ createdAt: -1 })
       .limit(20)
@@ -89,7 +86,7 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
       .filter((m) => m.role !== 'system')
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
-    // ── 5. Stream response via SSE ───────────────────────────────────────────
+    // ── 4. Stream response via SSE ───────────────────────────────────────────
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -100,179 +97,60 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
 
     await streamChatCompletion(
       chatHistory,
-      conversation.aiModel,
-      combinedSystemContext,
-      // onToken: send each token as SSE event
-      (token: string) => {
+      finalModel,
+      searchContext,
+      (token) => {
+        fullAssistantText += token;
         res.write(`data: ${JSON.stringify({ type: 'token', content: token })}\n\n`);
       },
-      // onComplete: save final message
-      async (fullText: string) => {
-        fullAssistantText = fullText;
+      async (completeText) => {
+        await Message.create({
+          conversationId,
+          role: 'assistant',
+          content: completeText,
+        });
+        await Conversation.findByIdAndUpdate(conversationId, {
+          $inc: { messageCount: 2 },
+          updatedAt: new Date(),
+        });
+        res.write(`data: ${JSON.stringify({ type: 'done', sources })}\n\n`);
+        res.end();
       },
-      conversation.systemPrompt
+      finalSystemPrompt
     );
 
-    // ── 6. Save assistant message to DB ──────────────────────────────────────
-    const assistantMessage = await Message.create({
-      conversationId,
-      role: 'assistant',
-      content: fullAssistantText,
-      sources,
-    });
-
-    // ── 7. Update conversation metadata ──────────────────────────────────────
-    await Conversation.findByIdAndUpdate(conversationId, {
-      $inc: { messageCount: 2 },
-      updatedAt: new Date(),
-    });
-
-
-
-    // ── 9. Send final SSE event with message metadata ─────────────────────────
-    res.write(
-      `data: ${JSON.stringify({
-        type: 'done',
-        messageId: assistantMessage.id,
-        sources,
-      })}\n\n`
-    );
-
-    res.end();
-
-  } catch (error) {
-    console.error('sendMessage error:', error);
+  } catch (error: any) {
+    console.error('SendMessage Error:', error);
     if (!res.headersSent) {
-      res.status(500).json({ success: false, error: 'Failed to send message' });
+      res.status(500).json({ success: false, error: 'Internal server error' });
     } else {
-      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Stream failed' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'error', content: 'Connection lost' })}\n\n`);
       res.end();
     }
   }
 };
 
-// POST /api/chats/:id/regenerate
-export const regenerateMessage = async (req: Request, res: Response): Promise<void> => {
+export const updateMessageReaction = async (req: Request, res: Response) => {
   try {
-    const { id: conversationId } = req.params;
-
-    const conversation = await Conversation.findOne({ _id: conversationId });
-    if (!conversation) {
-      res.status(404).json({ success: false, error: 'Conversation not found' });
-      return;
-    }
-
-    const recentMessagesDB = await Message.find({ conversationId })
-      .sort({ createdAt: -1 })
-      .limit(20)
-      .lean();
-
-    if (recentMessagesDB.length === 0) {
-      res.status(400).json({ success: false, error: 'No messages to regenerate' });
-      return;
-    }
-
-    let lastMessage = recentMessagesDB[0];
-    if (lastMessage.role === 'assistant') {
-      await Message.findByIdAndDelete(lastMessage._id);
-      recentMessagesDB.shift();
-    }
-
-    const newLastMessage = recentMessagesDB[0];
-    const content = newLastMessage?.content || '';
-
-    let sources: { title: string; url: string; description: string }[] = [];
-    let searchContext = '';
-
-    const autoSearchKeywords = ['latest', 'new', 'update', 'current', 'today', 'now', '2025', '2026', 'recent', 'news'];
-    const shouldAutoSearch = autoSearchKeywords.some(w => content.toLowerCase().includes(w));
-    const finalUseSearch = conversation.searchEnabled || shouldAutoSearch;
-
-    if (finalUseSearch && content) {
-      const searchResult = await smartSearch(content, 3);
-      sources = searchResult.sources;
-      searchContext = searchResult.contextString;
-    }
-
-    const memoryContext = await getUserMemoriesString('default_user');
-    const ragContext = await queryKnowledgeBase(conversationId, content, 3);
-    
-    let combinedSystemContext = memoryContext;
-    if (searchContext) combinedSystemContext += `\n\n${searchContext}`;
-    if (ragContext) {
-       combinedSystemContext += `\n\n--- DOCUMENT KNOWLEDGE BASE ---\n${ragContext}\n\nUse this information from the uploaded project documents to answer the question. Cite source filenames.`;
-    }
-    combinedSystemContext = combinedSystemContext.trim();
-
-    const chatHistory: ChatMessage[] = recentMessagesDB
-      .reverse()
-      .filter((m) => m.role !== 'system')
-      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
-
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
-    let fullAssistantText = '';
-
-    await streamChatCompletion(
-      chatHistory,
-      conversation.aiModel,
-      combinedSystemContext,
-      (token: string) => {
-        res.write(`data: ${JSON.stringify({ type: 'token', content: token })}\n\n`);
-      },
-      async (fullText: string) => {
-        fullAssistantText = fullText;
-      },
-      conversation.systemPrompt
-    );
-
-    const assistantMessage = await Message.create({
-      conversationId,
-      role: 'assistant',
-      content: fullAssistantText,
-      sources,
-    });
-
-    res.write(`data: ${JSON.stringify({ type: 'done', messageId: assistantMessage.id, sources })}\n\n`);
-    res.end();
-  } catch (error) {
-    console.error('regenerateMessage error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: 'Failed to regenerate message' });
-    } else {
-      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Stream failed' })}\n\n`);
-      res.end();
-    }
-  }
-};
-
-// PATCH /api/chats/:conversationId/messages/:messageId/reaction
-export const updateMessageReaction = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { messageId } = req.params;
+    const { id: conversationId, messageId } = req.params;
     const { reaction } = req.body;
-    
-    if (reaction !== 'upvote' && reaction !== 'downvote' && reaction !== null) {
-      res.status(400).json({ success: false, error: 'Invalid reaction' });
-      return;
+
+    if (!['upvote', 'downvote', null].includes(reaction)) {
+      return res.status(400).json({ success: false, error: 'Invalid reaction' });
     }
-    
-    const message = await Message.findByIdAndUpdate(
-      messageId,
+
+    const message = await Message.findOneAndUpdate(
+      { _id: messageId, conversationId },
       { reaction },
       { new: true }
     );
-    
+
     if (!message) {
-      res.status(404).json({ success: false, error: 'Message not found' });
-      return;
+      return res.status(404).json({ success: false, error: 'Message not found' });
     }
-    
+
     res.json({ success: true, data: { message } });
-  } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to update reaction' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 };
