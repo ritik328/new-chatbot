@@ -130,6 +130,90 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
+// POST /api/chats/:id/regenerate
+export const regenerateMessage = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id: conversationId } = req.params;
+
+    const conversation = await Conversation.findOne({ _id: conversationId });
+    if (!conversation) {
+      res.status(404).json({ success: false, error: 'Conversation not found' });
+      return;
+    }
+
+    // 1. Remove the last assistant message if it exists
+    const lastMsg = await Message.findOne({ conversationId }).sort({ createdAt: -1 });
+    if (lastMsg && lastMsg.role === 'assistant') {
+      await Message.findByIdAndDelete(lastMsg._id);
+      await Conversation.findByIdAndUpdate(conversationId, { $inc: { messageCount: -1 } });
+    }
+
+    // 2. Find the last user message to re-run
+    const lastUserMsg = await Message.findOne({ conversationId, role: 'user' }).sort({ createdAt: -1 });
+    if (!lastUserMsg) {
+      res.status(400).json({ success: false, error: 'No user message to regenerate from' });
+      return;
+    }
+
+    // 3. Re-use project settings logic
+    let project: any = null;
+    if (conversation.projectId) {
+      project = await Project.findById(conversation.projectId);
+    }
+    const finalModel = project?.aiModel || conversation.aiModel || 'gpt-4o-mini';
+    const finalSystemPrompt = project?.systemPrompt || conversation.systemPrompt;
+    const finalUseSearch = project?.webSearch || conversation.searchEnabled;
+    const projectCollection = project?.files?.[0]?.qdrantCollection;
+
+    let sources: any[] = [];
+    let searchContext = '';
+    if (finalUseSearch) {
+      const { contextString, sources: searchSources } = await smartSearch(lastUserMsg.content, 3);
+      searchContext = contextString;
+      sources = searchSources;
+    }
+
+    const memoryContext = await getUserMemoriesString('default_user');
+    const ragContext = await queryKnowledgeBase(projectCollection || conversationId, lastUserMsg.content, 3);
+    
+    const now = new Date();
+    const timeContext = `Current Date: ${now.toLocaleDateString()}\nCurrent Time: ${now.toLocaleTimeString()}`;
+
+    // 4. Load history for completion
+    const recentMessages = await Message.find({ conversationId }).sort({ createdAt: -1 }).limit(20).lean();
+    const chatHistory: ChatMessage[] = recentMessages.reverse().filter((m) => m.role !== 'system').map((m) => ({ role: m.role as any, content: m.content }));
+
+    // 5. Stream SSE response
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.flushHeaders();
+
+    let fullAssistantText = '';
+    await streamChatCompletion(
+      chatHistory,
+      finalModel,
+      searchContext,
+      (token) => {
+        fullAssistantText += token;
+        res.write(`data: ${JSON.stringify({ type: 'token', content: token })}\n\n`);
+      },
+      async (completeText) => {
+        await Message.create({ conversationId, role: 'assistant', content: completeText });
+        await Conversation.findByIdAndUpdate(conversationId, { $inc: { messageCount: 1 }, updatedAt: new Date() });
+        res.write(`data: ${JSON.stringify({ type: 'done', sources })}\n\n`);
+        res.end();
+      },
+      finalSystemPrompt
+    );
+  } catch (err: any) {
+    console.error('Regenerate Error:', err);
+    if (!res.headersSent) res.status(500).json({ success: false, error: err.message });
+    else { res.write(`data: ${JSON.stringify({ type: 'error', content: 'Regeneration failed' })}\n\n`); res.end(); }
+  }
+};
+
 export const updateMessageReaction = async (req: Request, res: Response) => {
   try {
     const { id: conversationId, messageId } = req.params;
